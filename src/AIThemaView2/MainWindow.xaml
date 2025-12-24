@@ -1,0 +1,234 @@
+<Window x:Class="AIThemaView2.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:AIThemaView2"
+        mc:Ignorable="d"
+        Title="AI Thema View - Korean Stock Market Timeline"
+        Height="800" Width="1200"
+        Background="{StaticResource BackgroundColor}">
+
+    <Window.Resources>
+        <!-- Timeline Item Style -->
+        <Style x:Key="TimelineItemStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource SecondaryBackgroundColor}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderColor}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="Margin" Value="0,2,0,2"/>
+            <Setter Property="Padding" Value="10,5"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#3E3E42"/>
+                    <Setter Property="BorderBrush" Value="{StaticResource AccentColor}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Category Badge Style -->
+        <Style x:Key="CategoryBadgeStyle" TargetType="Border">
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <!-- Button Style -->
+        <Style x:Key="ButtonStyle" TargetType="Button">
+            <Setter Property="Padding" Value="16,6"/>
+            <Setter Property="Background" Value="{StaticResource AccentColor}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextColor}"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="#005A9E"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Toolbar -->
+            <RowDefinition Height="Auto"/> <!-- Filter Bar -->
+            <RowDefinition Height="*"/>    <!-- Timeline -->
+            <RowDefinition Height="Auto"/> <!-- Status Bar -->
+        </Grid.RowDefinitions>
+
+        <!-- Toolbar -->
+        <Border Grid.Row="0" Background="{StaticResource SecondaryBackgroundColor}"
+                BorderBrush="{StaticResource BorderColor}" BorderThickness="0,0,0,1" Padding="12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <!-- Date Picker -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Margin="0,0,16,0">
+                    <TextBlock Text="날짜:" Foreground="{StaticResource SecondaryTextColor}"
+                               VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <DatePicker SelectedDate="{Binding SelectedDate, Mode=TwoWay}"
+                                Width="140" VerticalAlignment="Center"/>
+                </StackPanel>
+
+                <!-- Search Box -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="0,0,16,0">
+                    <TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                             Width="250" VerticalAlignment="Center"
+                             Background="{StaticResource BackgroundColor}"
+                             Foreground="{StaticResource SecondaryTextColor}"
+                             BorderBrush="{StaticResource BorderColor}" Padding="8,6"/>
+                    <Button Content="검색" Command="{Binding SearchCommand}"
+                            Margin="8,0,0,0" Style="{StaticResource ButtonStyle}"/>
+                </StackPanel>
+
+                <!-- Spacer -->
+                <StackPanel Grid.Column="2"/>
+
+                <!-- Refresh Button -->
+                <Button Grid.Column="3" Content="🔄 새로고침" Command="{Binding RefreshCommand}"
+                        Style="{StaticResource ButtonStyle}"/>
+            </Grid>
+        </Border>
+
+        <!-- Filter Bar -->
+        <Border Grid.Row="1" Background="#252526" BorderBrush="{StaticResource BorderColor}"
+                BorderThickness="0,0,0,1" Padding="12">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock Text="필터:" Foreground="{StaticResource SecondaryTextColor}"
+                           VerticalAlignment="Center" Margin="0,0,12,0"/>
+
+                <Button Content="전체" Command="{Binding ClearFilterCommand}"
+                        Margin="4,0" Style="{StaticResource ButtonStyle}"/>
+
+                <Button Content="공시" Command="{Binding FilterByCategoryCommand}" CommandParameter="공시"
+                        Margin="4,0" Background="#FF5722" Foreground="White"
+                        Style="{StaticResource ButtonStyle}"/>
+
+                <Button Content="이벤트" Command="{Binding FilterByCategoryCommand}" CommandParameter="이벤트"
+                        Margin="4,0" Background="#2196F3" Foreground="White"
+                        Style="{StaticResource ButtonStyle}"/>
+
+                <Button Content="공모주" Command="{Binding FilterByCategoryCommand}" CommandParameter="공모주"
+                        Margin="4,0" Background="#9C27B0" Foreground="White"
+                        Style="{StaticResource ButtonStyle}"/>
+
+                <Button Content="FOMC" Command="{Binding FilterByCategoryCommand}" CommandParameter="FOMC"
+                        Margin="4,0" Background="#E91E63" Foreground="White"
+                        Style="{StaticResource ButtonStyle}"/>
+
+                <Button Content="경제지표" Command="{Binding FilterByCategoryCommand}" CommandParameter="경제지표"
+                        Margin="4,0" Background="#00BCD4" Foreground="White"
+                        Style="{StaticResource ButtonStyle}"/>
+
+                <Button Content="실적" Command="{Binding FilterByCategoryCommand}" CommandParameter="실적"
+                        Margin="4,0" Background="#FF9800" Foreground="White"
+                        Style="{StaticResource ButtonStyle}"/>
+            </StackPanel>
+        </Border>
+
+        <!-- Timeline View -->
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Padding="24,12">
+            <ItemsControl ItemsSource="{Binding TimelineGroups}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <!-- Events - all in one line -->
+                        <ItemsControl ItemsSource="{Binding Events}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Style="{StaticResource TimelineItemStyle}" Cursor="Hand">
+                                        <Border.InputBindings>
+                                            <MouseBinding MouseAction="LeftClick" Command="{Binding OpenLinkCommand}"/>
+                                        </Border.InputBindings>
+
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="70"/>    <!-- Time -->
+                                                <ColumnDefinition Width="70"/>    <!-- Category -->
+                                                <ColumnDefinition Width="*"/>     <!-- Content -->
+                                                <ColumnDefinition Width="Auto"/>  <!-- Source -->
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- Time -->
+                                            <TextBlock Grid.Column="0" Text="{Binding TimeDisplay}"
+                                                       FontSize="12" FontWeight="SemiBold"
+                                                       Foreground="{StaticResource AccentColor}"
+                                                       VerticalAlignment="Center"
+                                                       Margin="0,0,12,0"/>
+
+                                            <!-- Category Badge -->
+                                            <Border Grid.Column="1" Style="{StaticResource CategoryBadgeStyle}">
+                                                <Border.Background>
+                                                    <SolidColorBrush Color="{Binding CategoryColor}"/>
+                                                </Border.Background>
+                                                <TextBlock Text="{Binding Category}"
+                                                           FontSize="10" FontWeight="SemiBold"
+                                                           Foreground="White"
+                                                           TextAlignment="Center"/>
+                                            </Border>
+
+                                            <!-- Content -->
+                                            <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,0,12,0">
+                                                <TextBlock Text="{Binding Title}"
+                                                           FontSize="13"
+                                                           Foreground="{StaticResource TextColor}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           VerticalAlignment="Center"
+                                                           Margin="0,0,8,0"/>
+                                                <TextBlock Text="{Binding RelatedStockName}"
+                                                           FontSize="12"
+                                                           Foreground="#B4B4B4"
+                                                           VerticalAlignment="Center"
+                                                           Margin="0,0,8,0"/>
+                                            </StackPanel>
+
+                                            <!-- Source -->
+                                            <TextBlock Grid.Column="3" Text="{Binding Source}"
+                                                       FontSize="11" Foreground="#666666"
+                                                       VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </ScrollViewer>
+
+        <!-- Status Bar -->
+        <Border Grid.Row="3" Background="{StaticResource AccentColor}" Padding="12,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Text="{Binding StatusMessage}"
+                           Foreground="White" VerticalAlignment="Center"/>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal"
+                            Visibility="{Binding IsLoading, Converter={StaticResource BoolToVisibilityConverter}}">
+                    <TextBlock Text="로딩 중..." Foreground="White" Margin="0,0,8,0"/>
+                    <ProgressBar IsIndeterminate="True" Width="100" Height="16"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>
