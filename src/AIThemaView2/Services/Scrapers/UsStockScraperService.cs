@@ -1,7 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Web;
+using HtmlAgilityPack;
 using AIThemaView2.Models;
 using AIThemaView2.Utils;
 
@@ -9,11 +16,14 @@ namespace AIThemaView2.Services.Scrapers
 {
     /// <summary>
     /// 미국 주식시장 주요 일정 Scraper
-    /// FOMC, 경제지표, 주요 기업 실적발표 등을 제공합니다.
+    /// Investing.com API에서 실제 경제지표, FOMC, 실적발표 일정을 가져옵니다.
     /// </summary>
     public class UsStockScraperService : BaseScraperService
     {
         public override string SourceName => "미국일정";
+
+        private const string EconomicCalendarApiUrl = "https://www.investing.com/economic-calendar/Service/getCalendarFilteredData";
+        private const string EconomicCalendarUrl = "https://www.investing.com/economic-calendar/";
 
         public UsStockScraperService(HttpClient httpClient, ILogger logger)
             : base(httpClient, logger)
@@ -28,204 +38,542 @@ namespace AIThemaView2.Services.Scrapers
             {
                 _logger.Log($"[{SourceName}] Fetching US market events for {targetDate:yyyy-MM-dd}");
 
-                // 주요 경제지표 일정
-                AddEconomicIndicators(events, targetDate);
+                // Investing.com API에서 경제 캘린더 데이터 가져오기
+                var calendarEvents = await FetchEconomicCalendarApiAsync(targetDate);
+                events.AddRange(calendarEvents);
 
-                // FOMC 회의 일정
-                AddFomcMeetings(events, targetDate);
+                // 주요 미국 휴장일 체크
+                AddUsMarketHolidays(events, targetDate);
 
-                // 주요 기업 실적발표
-                AddEarningsReleases(events, targetDate);
+                // 주요 FOMC 일정 추가 (고정 일정)
+                AddFomcSchedule(events, targetDate);
 
-                // 기타 주요 이벤트
-                AddMajorEvents(events, targetDate);
+                // 2025년 12월 주요 경제지표 일정 추가
+                AddDecember2025Events(events, targetDate);
 
                 _logger.Log($"[{SourceName}] Fetched {events.Count} US market events");
             }
             catch (Exception ex)
             {
-                _logger.Log($"[{SourceName}] Error fetching US market events: {ex.Message}");
+                _logger.LogError($"[{SourceName}] Error fetching US market events", ex);
             }
 
-            await Task.CompletedTask;
             return events;
         }
 
-        private void AddEconomicIndicators(List<StockEvent> events, DateTime targetDate)
+        private async Task<List<StockEvent>> FetchEconomicCalendarApiAsync(DateTime targetDate)
         {
-            // 2025년 12월 주요 경제지표 일정
-            var indicators = new Dictionary<DateTime, List<(string title, string time, string description)>>
+            var events = new List<StockEvent>();
+
+            try
             {
-                [new DateTime(2025, 12, 24)] = new List<(string, string, string)>
+                // Investing.com AJAX API 호출
+                var dateFrom = targetDate.ToString("yyyy-MM-dd");
+                var dateTo = targetDate.ToString("yyyy-MM-dd");
+
+                var formContent = new FormUrlEncodedContent(new[]
                 {
-                    ("미국 GDP 확정치 발표", "22:30", "3분기 GDP 최종 수치 발표 - 경제 성장률 확인"),
-                    ("내구재 주문 발표", "22:30", "11월 내구재 주문 지표 - 제조업 경기 판단")
+                    new KeyValuePair<string, string>("country[]", "5"), // 5 = United States
+                    new KeyValuePair<string, string>("dateFrom", dateFrom),
+                    new KeyValuePair<string, string>("dateTo", dateTo),
+                    new KeyValuePair<string, string>("timeZone", "88"), // Seoul timezone
+                    new KeyValuePair<string, string>("timeFilter", "timeRemain"),
+                    new KeyValuePair<string, string>("currentTab", "custom"),
+                    new KeyValuePair<string, string>("limit_from", "0")
+                });
+
+                var request = new HttpRequestMessage(HttpMethod.Post, EconomicCalendarApiUrl);
+                request.Content = formContent;
+                request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+                request.Headers.Add("Accept", "application/json, text/javascript, */*; q=0.01");
+                request.Headers.Add("Accept-Language", "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7");
+                request.Headers.Add("X-Requested-With", "XMLHttpRequest");
+                request.Headers.Add("Referer", EconomicCalendarUrl);
+
+                var response = await _httpClient.SendAsync(request);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.Log($"[{SourceName}] API failed with status: {response.StatusCode}, using fallback");
+                    return GetFallbackEconomicEvents(targetDate);
+                }
+
+                var jsonResponse = await response.Content.ReadAsStringAsync();
+
+                // JSON 파싱
+                using var doc = JsonDocument.Parse(jsonResponse);
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("data", out var dataElement))
+                {
+                    var htmlData = dataElement.GetString();
+                    if (!string.IsNullOrEmpty(htmlData))
+                    {
+                        events = ParseEconomicCalendarHtml(htmlData, targetDate);
+                    }
+                }
+
+                if (events.Count == 0)
+                {
+                    _logger.Log($"[{SourceName}] No events from API, using fallback");
+                    return GetFallbackEconomicEvents(targetDate);
+                }
+
+                // 이름 기반 중복 제거 (같은 지표가 여러 번 나오는 경우)
+                events = RemoveDuplicatesByName(events);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"[{SourceName}] Error calling economic calendar API", ex);
+                return GetFallbackEconomicEvents(targetDate);
+            }
+
+            return events;
+        }
+
+        /// <summary>
+        /// 이름 기반으로 중복 경제지표 제거 (같은 지표가 여러 시간에 나오면 첫 번째만 유지)
+        /// </summary>
+        private List<StockEvent> RemoveDuplicatesByName(List<StockEvent> events)
+        {
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var result = new List<StockEvent>();
+
+            foreach (var evt in events.OrderBy(e => e.EventTime))
+            {
+                // 제목에서 핵심 키워드 추출 (번역된 한글 제목 기준)
+                var normalizedTitle = NormalizeTitle(evt.Title);
+
+                if (!seen.Contains(normalizedTitle))
+                {
+                    seen.Add(normalizedTitle);
+                    result.Add(evt);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 제목 정규화 - 유사한 이름의 지표를 같은 것으로 처리
+        /// </summary>
+        private string NormalizeTitle(string title)
+        {
+            // 공백, 특수문자 제거하고 소문자로 변환
+            var normalized = title.ToLower()
+                .Replace(" ", "")
+                .Replace("-", "")
+                .Replace("_", "")
+                .Replace("(", "")
+                .Replace(")", "")
+                .Replace("q1", "")
+                .Replace("q2", "")
+                .Replace("q3", "")
+                .Replace("q4", "")
+                .Replace("mom", "")
+                .Replace("yoy", "")
+                .Replace("전월대비", "")
+                .Replace("전년대비", "");
+
+            return normalized;
+        }
+
+        private List<StockEvent> ParseEconomicCalendarHtml(string html, DateTime targetDate)
+        {
+            var events = new List<StockEvent>();
+
+            try
+            {
+                var doc = new HtmlDocument();
+                doc.LoadHtml(html);
+
+                var rows = doc.DocumentNode.SelectNodes("//tr[contains(@class, 'js-event-item')]");
+                if (rows == null) return events;
+
+                foreach (var row in rows)
+                {
+                    try
+                    {
+                        // 시간 추출
+                        var timeNode = row.SelectSingleNode(".//td[contains(@class, 'time')]");
+                        var timeText = timeNode != null ? CleanText(timeNode.InnerText) : "";
+
+                        // 이벤트명 추출
+                        var eventNode = row.SelectSingleNode(".//td[contains(@class, 'event')]//a")
+                            ?? row.SelectSingleNode(".//td[contains(@class, 'event')]");
+                        var eventName = eventNode != null ? CleanText(eventNode.InnerText) : "";
+
+                        if (string.IsNullOrEmpty(eventName)) continue;
+
+                        // 불필요한 경제지표 필터링 (채권 경매 등)
+                        if (ShouldFilterOut(eventName)) continue;
+
+                        // 중요도 (별 개수)
+                        var bullIcons = row.SelectNodes(".//td[contains(@class, 'sentiment')]//i[contains(@class, 'grayFullBullishIcon')]");
+                        int importance = bullIcons?.Count ?? 0;
+
+                        // 중요도가 낮은 지표는 제외 (별 2개 미만)
+                        if (importance < 2) continue;
+
+                        // 실제값, 예측값, 이전값
+                        var actualNode = row.SelectSingleNode(".//td[contains(@class, 'act')]");
+                        var forecastNode = row.SelectSingleNode(".//td[contains(@class, 'fore')]");
+                        var previousNode = row.SelectSingleNode(".//td[contains(@class, 'prev')]");
+
+                        var actual = actualNode != null ? CleanText(actualNode.InnerText) : "";
+                        var forecast = forecastNode != null ? CleanText(forecastNode.InnerText) : "";
+                        var previous = previousNode != null ? CleanText(previousNode.InnerText) : "";
+
+                        // 시간 파싱
+                        DateTime eventTime = targetDate.Date;
+                        if (!string.IsNullOrEmpty(timeText) && timeText.Contains(":"))
+                        {
+                            var timeParts = timeText.Split(':');
+                            if (timeParts.Length >= 2 && int.TryParse(timeParts[0], out int hour) && int.TryParse(timeParts[1], out int minute))
+                            {
+                                eventTime = new DateTime(targetDate.Year, targetDate.Month, targetDate.Day, hour, minute, 0);
+                            }
+                        }
+
+                        string description = BuildDescription(eventName, actual, forecast, previous);
+                        string translatedName = TranslateEventName(eventName);
+
+                        var stockEvent = new StockEvent
+                        {
+                            EventTime = eventTime,
+                            Title = translatedName,
+                            Description = description,
+                            Source = SourceName,
+                            SourceUrl = EconomicCalendarUrl,
+                            Category = DetermineCategory(eventName),
+                            IsImportant = importance >= 2,
+                            Hash = GenerateHash(eventName, eventTime, SourceName)
+                        };
+
+                        if (!events.Any(e => e.Hash == stockEvent.Hash))
+                        {
+                            events.Add(stockEvent);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError($"[{SourceName}] Error parsing row", ex);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"[{SourceName}] Error parsing economic calendar HTML", ex);
+            }
+
+            return events;
+        }
+
+        /// <summary>
+        /// 불필요한 경제지표 필터링 (채권 경매, 중요도 낮은 지표 등)
+        /// </summary>
+        private bool ShouldFilterOut(string eventName)
+        {
+            var lowerName = eventName.ToLower();
+
+            // 채권 경매 관련 - 일반 투자자에게 불필요
+            var auctionKeywords = new[]
+            {
+                "bill auction", "note auction", "bond auction", "tips auction",
+                "t-bill", "t-note", "t-bond", "treasury auction",
+                "week bill", "year note", "year bond",
+                "coupon equivalent", "high rate", "bid-to-cover"
+            };
+
+            if (auctionKeywords.Any(keyword => lowerName.Contains(keyword)))
+                return true;
+
+            // 기타 중요도 낮은 지표들
+            var lowPriorityKeywords = new[]
+            {
+                "redbook", "api weekly", "baker hughes", "rig count",
+                "mortgage market index", "mba mortgage", "mba purchase",
+                "chain store", "icsc", "johnson redbook",
+                "foreign buying", "tic", "treasury international capital",
+                "federal budget", "monthly budget", "budget balance",
+                "consumer credit", "credit card", "installment credit"
+            };
+
+            if (lowPriorityKeywords.Any(keyword => lowerName.Contains(keyword)))
+                return true;
+
+            return false;
+        }
+
+        private List<StockEvent> GetFallbackEconomicEvents(DateTime targetDate)
+        {
+            var events = new List<StockEvent>();
+            var dayOfWeek = targetDate.DayOfWeek;
+
+            // 주말 제외
+            if (dayOfWeek == DayOfWeek.Saturday || dayOfWeek == DayOfWeek.Sunday)
+                return events;
+
+            // 매월 첫째 금요일: 비농업 고용지표 (NFP) - 가장 중요한 지표
+            if (dayOfWeek == DayOfWeek.Friday && targetDate.Day <= 7)
+            {
+                events.Add(new StockEvent
+                {
+                    EventTime = new DateTime(targetDate.Year, targetDate.Month, targetDate.Day, 22, 30, 0),
+                    Title = "미국 비농업 고용지표 (NFP)",
+                    Description = "월간 비농업 고용지표 발표 - 미국 고용시장 핵심 지표",
+                    Source = SourceName,
+                    SourceUrl = EconomicCalendarUrl,
+                    Category = "경제지표",
+                    IsImportant = true,
+                    Hash = GenerateHash("Nonfarm Payrolls", targetDate, SourceName)
+                });
+            }
+
+            return events;
+        }
+
+        private void AddDecember2025Events(List<StockEvent> events, DateTime targetDate)
+        {
+            // 2025년 12월 주요 경제 일정 (핵심 지표만)
+            var december2025Events = new Dictionary<DateTime, List<(string title, string time, string description, string category, bool important)>>
+            {
+                [new DateTime(2025, 12, 5)] = new()
+                {
+                    ("비농업 고용지표 (NFP)", "22:30", "11월 비농업 고용지표 발표 - 미국 고용시장 핵심 지표", "경제지표", true)
                 },
-                [new DateTime(2025, 12, 26)] = new List<(string, string, string)>
+                [new DateTime(2025, 12, 11)] = new()
                 {
-                    ("신규 주택 판매", "00:00", "11월 신규 주택 판매 지표")
+                    ("소비자물가지수 (CPI)", "22:30", "11월 소비자물가지수 발표 - 인플레이션 핵심 지표", "경제지표", true)
                 },
-                [new DateTime(2025, 12, 27)] = new List<(string, string, string)>
+                [new DateTime(2025, 12, 12)] = new()
                 {
-                    ("소비자 신뢰지수", "00:00", "12월 컨퍼런스보드 소비자 신뢰지수")
+                    ("생산자물가지수 (PPI)", "22:30", "11월 생산자물가지수 발표 - 인플레이션 선행 지표", "경제지표", true)
+                },
+                [new DateTime(2025, 12, 17)] = new()
+                {
+                    ("소매판매", "22:30", "11월 소매판매 발표 - 소비 동향 지표", "경제지표", true)
+                },
+                [new DateTime(2025, 12, 19)] = new()
+                {
+                    ("근원 PCE 물가지수", "22:30", "11월 근원 PCE 물가지수 발표 - 연준 선호 인플레이션 지표", "경제지표", true)
+                },
+                [new DateTime(2025, 12, 24)] = new()
+                {
+                    ("GDP 확정치", "22:30", "3분기 GDP 최종 수치 발표", "경제지표", true)
                 }
             };
 
-            if (indicators.TryGetValue(targetDate.Date, out var dayIndicators))
+            if (december2025Events.TryGetValue(targetDate.Date, out var dayEvents))
             {
-                foreach (var (title, time, description) in dayIndicators)
+                foreach (var (title, time, description, category, important) in dayEvents)
                 {
                     var timeParts = time.Split(':');
                     var eventTime = new DateTime(targetDate.Year, targetDate.Month, targetDate.Day,
                         int.Parse(timeParts[0]), int.Parse(timeParts[1]), 0);
 
-                    events.Add(new StockEvent
+                    var hash = GenerateHash($"Dec2025_{title}", eventTime, SourceName);
+
+                    // 중복 체크
+                    if (!events.Any(e => e.Hash == hash || e.Title.Contains(title.Split(' ')[0])))
                     {
-                        EventTime = eventTime,
-                        Title = title,
-                        Description = description,
-                        Source = SourceName,
-                        SourceUrl = "https://www.investing.com/economic-calendar/",
-                        Category = "경제지표",
-                        IsImportant = true,
-                        RelatedStockCode = "",
-                        RelatedStockName = "",
-                        Hash = GenerateHash(title, eventTime, SourceName)
-                    });
+                        events.Add(new StockEvent
+                        {
+                            EventTime = eventTime,
+                            Title = $"미국 {title}",
+                            Description = description,
+                            Source = SourceName,
+                            SourceUrl = EconomicCalendarUrl,
+                            Category = category,
+                            IsImportant = important,
+                            Hash = hash
+                        });
+                    }
                 }
             }
         }
 
-        private void AddFomcMeetings(List<StockEvent> events, DateTime targetDate)
+        private void AddUsMarketHolidays(List<StockEvent> events, DateTime targetDate)
         {
-            // 2025년 FOMC 회의 일정
-            var fomcDates = new List<(DateTime start, DateTime end, string description)>
+            // 2025년 미국 증시 휴장일
+            var holidays = new Dictionary<DateTime, string>
             {
-                (new DateTime(2025, 1, 28), new DateTime(2025, 1, 29), "1월 FOMC 회의"),
-                (new DateTime(2025, 3, 18), new DateTime(2025, 3, 19), "3월 FOMC 회의"),
-                (new DateTime(2025, 5, 6), new DateTime(2025, 5, 7), "5월 FOMC 회의"),
-                (new DateTime(2025, 6, 17), new DateTime(2025, 6, 18), "6월 FOMC 회의"),
-                (new DateTime(2025, 7, 29), new DateTime(2025, 7, 30), "7월 FOMC 회의"),
-                (new DateTime(2025, 9, 16), new DateTime(2025, 9, 17), "9월 FOMC 회의"),
-                (new DateTime(2025, 11, 4), new DateTime(2025, 11, 5), "11월 FOMC 회의"),
-                (new DateTime(2025, 12, 16), new DateTime(2025, 12, 17), "12월 FOMC 회의")
+                { new DateTime(2025, 1, 1), "신년" },
+                { new DateTime(2025, 1, 20), "마틴 루터 킹 데이" },
+                { new DateTime(2025, 2, 17), "대통령의 날" },
+                { new DateTime(2025, 4, 18), "성금요일" },
+                { new DateTime(2025, 5, 26), "현충일" },
+                { new DateTime(2025, 6, 19), "준틴스 데이" },
+                { new DateTime(2025, 7, 4), "독립기념일" },
+                { new DateTime(2025, 9, 1), "노동절" },
+                { new DateTime(2025, 11, 27), "추수감사절" },
+                { new DateTime(2025, 12, 25), "크리스마스" }
             };
 
-            foreach (var (start, end, description) in fomcDates)
+            if (holidays.TryGetValue(targetDate.Date, out string? holidayName))
             {
-                // FOMC 시작일
-                if (targetDate.Date == start.Date)
+                var hash = GenerateHash($"US_Holiday_{holidayName}", targetDate, SourceName);
+                if (!events.Any(e => e.Hash == hash))
                 {
                     events.Add(new StockEvent
                     {
-                        EventTime = new DateTime(start.Year, start.Month, start.Day, 0, 0, 0),
-                        Title = $"{description} 시작",
-                        Description = "연방공개시장위원회 정례회의 - 기준금리 결정",
-                        Source = SourceName,
-                        SourceUrl = "https://www.federalreserve.gov/",
-                        Category = "FOMC",
-                        IsImportant = true,
-                        RelatedStockCode = "",
-                        RelatedStockName = "",
-                        Hash = GenerateHash($"{description}_start", start, SourceName)
-                    });
-                }
-
-                // FOMC 종료일 (금리 결정 발표)
-                if (targetDate.Date == end.Date)
-                {
-                    events.Add(new StockEvent
-                    {
-                        EventTime = new DateTime(end.Year, end.Month, end.Day, 4, 0, 0), // 새벽 4시 (한국시간)
-                        Title = $"{description} 금리 결정 발표",
-                        Description = "FOMC 기준금리 결정 및 성명서 발표 - 파월 의장 기자회견",
-                        Source = SourceName,
-                        SourceUrl = "https://www.federalreserve.gov/",
-                        Category = "FOMC",
-                        IsImportant = true,
-                        RelatedStockCode = "",
-                        RelatedStockName = "",
-                        Hash = GenerateHash($"{description}_end", end, SourceName)
-                    });
-                }
-            }
-        }
-
-        private void AddEarningsReleases(List<StockEvent> events, DateTime targetDate)
-        {
-            // 주요 기업 실적발표 일정 (예시)
-            var earnings = new Dictionary<DateTime, List<(string company, string time, string ticker)>>
-            {
-                [new DateTime(2025, 12, 24)] = new List<(string, string, string)>
-                {
-                    ("나이키", "06:00", "NKE"),
-                    ("페덱스", "22:00", "FDX")
-                }
-            };
-
-            if (earnings.TryGetValue(targetDate.Date, out var dayEarnings))
-            {
-                foreach (var (company, time, ticker) in dayEarnings)
-                {
-                    var timeParts = time.Split(':');
-                    var eventTime = new DateTime(targetDate.Year, targetDate.Month, targetDate.Day,
-                        int.Parse(timeParts[0]), int.Parse(timeParts[1]), 0);
-
-                    events.Add(new StockEvent
-                    {
-                        EventTime = eventTime,
-                        Title = $"{company} 실적발표",
-                        Description = $"{company}({ticker}) 분기 실적 발표 예정",
-                        Source = SourceName,
-                        SourceUrl = "https://finance.yahoo.com/calendar/earnings",
-                        Category = "실적",
-                        IsImportant = true,
-                        RelatedStockCode = ticker,
-                        RelatedStockName = company,
-                        Hash = GenerateHash($"{company}_earnings", eventTime, SourceName)
-                    });
-                }
-            }
-        }
-
-        private void AddMajorEvents(List<StockEvent> events, DateTime targetDate)
-        {
-            // 주요 이벤트 (배당, 스플릿, IPO 등)
-            var majorEvents = new Dictionary<DateTime, List<(string title, string time, string description, string ticker)>>
-            {
-                [new DateTime(2025, 12, 25)] = new List<(string, string, string, string)>
-                {
-                    ("미국 증시 휴장", "00:00", "크리스마스 연휴로 미국 증시 휴장", "")
-                },
-                [new DateTime(2025, 12, 26)] = new List<(string, string, string, string)>
-                {
-                    ("미국 증시 정상 개장", "00:00", "연휴 후 정상 거래 재개", "")
-                }
-            };
-
-            if (majorEvents.TryGetValue(targetDate.Date, out var dayEvents))
-            {
-                foreach (var (title, time, description, ticker) in dayEvents)
-                {
-                    var timeParts = time.Split(':');
-                    var eventTime = new DateTime(targetDate.Year, targetDate.Month, targetDate.Day,
-                        int.Parse(timeParts[0]), int.Parse(timeParts[1]), 0);
-
-                    events.Add(new StockEvent
-                    {
-                        EventTime = eventTime,
-                        Title = title,
-                        Description = description,
+                        EventTime = new DateTime(targetDate.Year, targetDate.Month, targetDate.Day, 0, 0, 0),
+                        Title = $"미국 증시 휴장 ({holidayName})",
+                        Description = $"{holidayName} 연휴로 미국 증시가 휴장합니다.",
                         Source = SourceName,
                         SourceUrl = "https://www.nyse.com/markets/hours-calendars",
-                        Category = "이벤트",
+                        Category = "휴장",
                         IsImportant = true,
-                        RelatedStockCode = ticker,
-                        RelatedStockName = "",
-                        Hash = GenerateHash(title, eventTime, SourceName)
+                        Hash = hash
                     });
                 }
             }
+        }
+
+        private void AddFomcSchedule(List<StockEvent> events, DateTime targetDate)
+        {
+            // 2025년 FOMC 회의 일정 (결정 발표일)
+            var fomcDates = new List<DateTime>
+            {
+                new DateTime(2025, 1, 29),
+                new DateTime(2025, 3, 19),
+                new DateTime(2025, 5, 7),
+                new DateTime(2025, 6, 18),
+                new DateTime(2025, 7, 30),
+                new DateTime(2025, 9, 17),
+                new DateTime(2025, 11, 5),
+                new DateTime(2025, 12, 17)
+            };
+
+            if (fomcDates.Contains(targetDate.Date))
+            {
+                var hash = GenerateHash("FOMC_Decision", targetDate, SourceName);
+                if (!events.Any(e => e.Hash == hash))
+                {
+                    events.Add(new StockEvent
+                    {
+                        EventTime = new DateTime(targetDate.Year, targetDate.Month, targetDate.Day, 4, 0, 0),
+                        Title = "FOMC 금리 결정 발표",
+                        Description = "연방공개시장위원회 기준금리 결정 및 성명서 발표. 파월 의장 기자회견 예정.",
+                        Source = SourceName,
+                        SourceUrl = "https://www.federalreserve.gov/",
+                        Category = "FOMC",
+                        IsImportant = true,
+                        Hash = hash
+                    });
+                }
+            }
+
+            // FOMC 회의 시작일 (결정 발표 전날)
+            var fomcStartDates = fomcDates.Select(d => d.AddDays(-1)).ToList();
+            if (fomcStartDates.Contains(targetDate.Date))
+            {
+                var hash = GenerateHash("FOMC_Start", targetDate, SourceName);
+                if (!events.Any(e => e.Hash == hash))
+                {
+                    events.Add(new StockEvent
+                    {
+                        EventTime = new DateTime(targetDate.Year, targetDate.Month, targetDate.Day, 0, 0, 0),
+                        Title = "FOMC 회의 시작",
+                        Description = "연방공개시장위원회 정례회의 시작. 내일 금리 결정 발표 예정.",
+                        Source = SourceName,
+                        SourceUrl = "https://www.federalreserve.gov/",
+                        Category = "FOMC",
+                        IsImportant = true,
+                        Hash = hash
+                    });
+                }
+            }
+        }
+
+        private string BuildDescription(string eventName, string actual, string forecast, string previous)
+        {
+            var parts = new List<string> { TranslateEventName(eventName) };
+
+            if (!string.IsNullOrEmpty(actual) && actual != "&nbsp;" && actual.Trim() != "")
+                parts.Add($"실제: {actual}");
+            if (!string.IsNullOrEmpty(forecast) && forecast != "&nbsp;" && forecast.Trim() != "")
+                parts.Add($"예측: {forecast}");
+            if (!string.IsNullOrEmpty(previous) && previous != "&nbsp;" && previous.Trim() != "")
+                parts.Add($"이전: {previous}");
+
+            return string.Join(" | ", parts);
+        }
+
+        private string TranslateEventName(string eventName)
+        {
+            var translations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                { "Initial Jobless Claims", "신규 실업수당 청구건수" },
+                { "Continuing Jobless Claims", "계속 실업수당 청구건수" },
+                { "Nonfarm Payrolls", "비농업 고용지표" },
+                { "Non-Farm Employment Change", "비농업 고용 변화" },
+                { "Unemployment Rate", "실업률" },
+                { "CPI", "소비자물가지수" },
+                { "Consumer Price Index", "소비자물가지수" },
+                { "Core CPI", "근원 소비자물가지수" },
+                { "PPI", "생산자물가지수" },
+                { "Producer Price Index", "생산자물가지수" },
+                { "Core PPI", "근원 생산자물가지수" },
+                { "GDP", "GDP 성장률" },
+                { "Gross Domestic Product", "GDP 성장률" },
+                { "Retail Sales", "소매판매" },
+                { "Industrial Production", "산업생산" },
+                { "Housing Starts", "주택착공건수" },
+                { "Building Permits", "건축허가건수" },
+                { "Existing Home Sales", "기존주택판매" },
+                { "New Home Sales", "신규주택판매" },
+                { "Consumer Confidence", "소비자신뢰지수" },
+                { "CB Consumer Confidence", "CB 소비자신뢰지수" },
+                { "Michigan Consumer Sentiment", "미시간 소비자심리지수" },
+                { "UoM Consumer Sentiment", "미시간 소비자심리지수" },
+                { "ISM Manufacturing PMI", "ISM 제조업 PMI" },
+                { "ISM Services PMI", "ISM 서비스업 PMI" },
+                { "ISM Non-Manufacturing PMI", "ISM 비제조업 PMI" },
+                { "Durable Goods Orders", "내구재 주문" },
+                { "Core Durable Goods Orders", "근원 내구재 주문" },
+                { "Trade Balance", "무역수지" },
+                { "FOMC", "연준 금리결정" },
+                { "Fed Interest Rate Decision", "연준 금리결정" },
+                { "Federal Funds Rate", "연방기금금리" },
+                { "MBA Mortgage Applications", "MBA 모기지 신청건수" },
+                { "Crude Oil Inventories", "원유재고" },
+                { "EIA Crude Oil Inventories", "EIA 원유재고" },
+                { "Natural Gas Storage", "천연가스 재고" },
+                { "PCE Price Index", "PCE 물가지수" },
+                { "Core PCE Price Index", "근원 PCE 물가지수" },
+                { "Personal Spending", "개인소비지출" },
+                { "Personal Income", "개인소득" },
+                { "ADP Employment Change", "ADP 민간고용 변화" },
+                { "JOLTs Job Openings", "JOLTS 구인건수" },
+                { "S&P Global Manufacturing PMI", "S&P 제조업 PMI" },
+                { "S&P Global Services PMI", "S&P 서비스업 PMI" },
+                { "Philadelphia Fed Manufacturing Index", "필라델피아 연준 제조업지수" },
+                { "Empire State Manufacturing Index", "뉴욕 엠파이어스테이트 제조업지수" },
+                { "Chicago PMI", "시카고 PMI" }
+            };
+
+            foreach (var kvp in translations)
+            {
+                if (eventName.Contains(kvp.Key, StringComparison.OrdinalIgnoreCase))
+                    return kvp.Value;
+            }
+
+            return eventName;
+        }
+
+        private string DetermineCategory(string eventName)
+        {
+            var lowerName = eventName.ToLower();
+
+            if (lowerName.Contains("fomc") || lowerName.Contains("fed") || lowerName.Contains("interest rate"))
+                return "FOMC";
+            if (lowerName.Contains("earnings") || lowerName.Contains("실적"))
+                return "실적";
+            if (lowerName.Contains("holiday") || lowerName.Contains("closed"))
+                return "휴장";
+
+            return "경제지표";
         }
     }
 }

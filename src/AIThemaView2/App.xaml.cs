@@ -99,6 +99,11 @@ namespace AIThemaView2
                 services.AddSingleton<IScraperService, UsStockScraperService>();
             }
 
+            if (configuration.GetValue<bool>("DataSources:LockupExpiry:Enabled", false))
+            {
+                services.AddSingleton<IScraperService, LockupExpiryScraperService>();
+            }
+
             // Mock data for testing
             if (configuration.GetValue<bool>("DataSources:MockData:Enabled", false))
             {

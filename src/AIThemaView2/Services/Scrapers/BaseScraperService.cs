@@ -44,62 +44,17 @@ namespace AIThemaView2.Services.Scrapers
             {
                 _logger.Log($"[{SourceName}] Loading URL: {url}");
 
-                // Get response as bytes to handle different encodings (especially EUC-KR for Korean sites)
+                // Register encoding provider for EUC-KR support
+                Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+
+                // Get response as bytes to handle different encodings
                 var response = await _httpClient.GetAsync(url);
                 response.EnsureSuccessStatusCode();
 
                 var bytes = await response.Content.ReadAsByteArrayAsync();
 
-                // Try to detect encoding from Content-Type header
-                var contentType = response.Content.Headers.ContentType?.CharSet;
-                Encoding encoding = Encoding.UTF8;
-
-                // Korean sites often use EUC-KR
-                if (!string.IsNullOrEmpty(contentType))
-                {
-                    try
-                    {
-                        // Register EUC-KR encoding provider
-                        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-
-                        if (contentType.ToLower().Contains("euc-kr"))
-                        {
-                            encoding = Encoding.GetEncoding("euc-kr");
-                        }
-                        else
-                        {
-                            encoding = Encoding.GetEncoding(contentType);
-                        }
-                    }
-                    catch
-                    {
-                        // If encoding fails, try EUC-KR for Korean sites
-                        if (url.Contains("naver.com") || url.Contains("krx.co.kr"))
-                        {
-                            try
-                            {
-                                encoding = Encoding.GetEncoding("euc-kr");
-                            }
-                            catch
-                            {
-                                encoding = Encoding.UTF8;
-                            }
-                        }
-                    }
-                }
-                else if (url.Contains("naver.com") || url.Contains("krx.co.kr"))
-                {
-                    // Korean sites default to EUC-KR
-                    try
-                    {
-                        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
-                        encoding = Encoding.GetEncoding("euc-kr");
-                    }
-                    catch
-                    {
-                        encoding = Encoding.UTF8;
-                    }
-                }
+                // Detect encoding
+                Encoding encoding = DetectEncoding(url, bytes, response.Content.Headers.ContentType?.CharSet);
 
                 var html = encoding.GetString(bytes);
                 var doc = new HtmlDocument();
@@ -111,6 +66,82 @@ namespace AIThemaView2.Services.Scrapers
                 _logger.LogError($"[{SourceName}] Error loading HTML from {url}", ex);
                 throw;
             }
+        }
+
+        private Encoding DetectEncoding(string url, byte[] bytes, string? contentTypeCharset)
+        {
+            // Korean sites that typically use EUC-KR
+            var eucKrSites = new[] { "38.co.kr", "naver.com", "krx.co.kr", "kind.krx.co.kr" };
+
+            // Check if it's a known EUC-KR site
+            bool isKoreanSite = eucKrSites.Any(site => url.Contains(site));
+
+            // Try to detect from Content-Type header
+            if (!string.IsNullOrEmpty(contentTypeCharset))
+            {
+                try
+                {
+                    var charset = contentTypeCharset.ToLower().Trim();
+                    if (charset.Contains("euc-kr") || charset.Contains("euc_kr"))
+                    {
+                        return Encoding.GetEncoding("euc-kr");
+                    }
+                    if (charset.Contains("utf-8") || charset.Contains("utf8"))
+                    {
+                        return Encoding.UTF8;
+                    }
+                    return Encoding.GetEncoding(contentTypeCharset);
+                }
+                catch
+                {
+                    // Fall through to other detection methods
+                }
+            }
+
+            // Try to detect from HTML meta tag
+            var htmlPreview = Encoding.ASCII.GetString(bytes, 0, Math.Min(bytes.Length, 2048));
+
+            // Check for charset in meta tag
+            var charsetMatch = System.Text.RegularExpressions.Regex.Match(
+                htmlPreview,
+                @"charset\s*=\s*[""']?([^""'\s>]+)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+            if (charsetMatch.Success)
+            {
+                var detectedCharset = charsetMatch.Groups[1].Value.ToLower().Trim();
+                try
+                {
+                    if (detectedCharset.Contains("euc-kr") || detectedCharset.Contains("euc_kr"))
+                    {
+                        return Encoding.GetEncoding("euc-kr");
+                    }
+                    if (detectedCharset.Contains("utf-8") || detectedCharset.Contains("utf8"))
+                    {
+                        return Encoding.UTF8;
+                    }
+                    return Encoding.GetEncoding(detectedCharset);
+                }
+                catch
+                {
+                    // Fall through
+                }
+            }
+
+            // Default for known Korean sites
+            if (isKoreanSite)
+            {
+                try
+                {
+                    return Encoding.GetEncoding("euc-kr");
+                }
+                catch
+                {
+                    return Encoding.UTF8;
+                }
+            }
+
+            return Encoding.UTF8;
         }
 
         protected string GenerateHash(string title, DateTime eventTime, string source)

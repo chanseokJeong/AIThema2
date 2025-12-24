@@ -125,11 +125,11 @@ namespace AIThemaView2.ViewModels
         public async Task RefreshDataAsync()
         {
             IsLoading = true;
-            StatusMessage = "Collecting latest data...";
+            StatusMessage = $"Collecting data for {SelectedDate:yyyy-MM-dd}...";
 
             try
             {
-                var newEventsCount = await _dataCollectionService.CollectTodayEventsAsync();
+                var newEventsCount = await _dataCollectionService.CollectEventsForDateAsync(SelectedDate);
                 await LoadEventsForSelectedDateAsync();
                 StatusMessage = $"Refreshed. {newEventsCount} new events found.";
             }

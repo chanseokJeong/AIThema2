@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:AIThemaView2"
+             xmlns:converters="clr-namespace:AIThemaView2.Converters"
              Startup="OnStartup"
              Exit="OnExit">
     <Application.Resources>
@@ -14,7 +15,8 @@
         <SolidColorBrush x:Key="SecondaryTextColor" Color="#CCCCCC"/>
         <SolidColorBrush x:Key="TertiaryTextColor" Color="#888888"/>
 
-        <!-- Bool to Visibility Converter -->
+        <!-- Converters -->
         <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
+        <converters:BoolToColorConverter x:Key="BoolToColorConverter"/>
     </Application.Resources>
 </Application>

@@ -64,7 +64,17 @@ namespace AIThemaView2.Models
             "공모주" => "#9C27B0",
             "FOMC" => "#E91E63",
             "경제지표" => "#00BCD4",
+            "휴장" => "#F44336",
+            "의무보호해제" => "#FF6B6B",
             _ => "#757575"
         };
+
+        [NotMapped]
+        public System.Windows.FontWeight TitleFontWeight => IsImportant
+            ? System.Windows.FontWeights.Bold
+            : System.Windows.FontWeights.Normal;
+
+        [NotMapped]
+        public string TitleColor => IsImportant ? "#FFD700" : "#E0E0E0";
     }
 }
