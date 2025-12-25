@@ -221,22 +221,21 @@ namespace AIThemaView2.Services.Scrapers
 
             try
             {
-                // 전체 텍스트에서 이벤트 관련 키워드 찾기
-                var allText = doc.DocumentNode.InnerText;
-
-                // 경제지표 패턴 찾기
-                var indicatorPatterns = new[]
-                {
-                    "GDP", "CPI", "PPI", "고용", "실업", "금리", "PMI",
-                    "소매판매", "무역수지", "산업생산", "소비자", "생산자",
-                    "FOMC", "PCE", "ISM", "비농업"
-                };
-
-                // 주식 이벤트 패턴
+                // 주식 관련 이벤트 패턴만 (경제지표는 Investing.com에서 가져오므로 제외)
                 var stockPatterns = new[]
                 {
                     "상장", "공모", "청약", "배당", "실적", "증자",
-                    "분할", "합병", "보호예수", "락업"
+                    "분할", "합병", "보호예수", "락업", "유상증자", "무상증자",
+                    "결산", "주주총회", "IR", "컨퍼런스콜"
+                };
+
+                // 제외할 패턴 (경제지표 - Investing.com에서 이미 수집)
+                var excludePatterns = new[]
+                {
+                    "GDP", "CPI", "PPI", "PMI", "PCE", "ISM", "FOMC",
+                    "고용", "실업", "금리", "소매판매", "무역수지", "산업생산",
+                    "소비자물가", "생산자물가", "비농업", "주택", "신규주문",
+                    "경제지표", "발표", "지수"
                 };
 
                 // span 태그들에서 이벤트 추출
@@ -246,12 +245,15 @@ namespace AIThemaView2.Services.Scrapers
                     foreach (var span in spanNodes)
                     {
                         var text = CleanText(span.InnerText);
-                        if (string.IsNullOrEmpty(text) || text.Length < 4)
+                        if (string.IsNullOrEmpty(text) || text.Length < 4 || text.Length > 100)
                             continue;
 
-                        // 경제지표나 주식 이벤트 키워드 포함 여부 확인
-                        bool isRelevant = indicatorPatterns.Any(p => text.Contains(p, StringComparison.OrdinalIgnoreCase))
-                            || stockPatterns.Any(p => text.Contains(p, StringComparison.OrdinalIgnoreCase));
+                        // 경제지표 관련 키워드가 포함되어 있으면 제외
+                        if (excludePatterns.Any(p => text.Contains(p, StringComparison.OrdinalIgnoreCase)))
+                            continue;
+
+                        // 주식 이벤트 키워드 포함 여부 확인
+                        bool isRelevant = stockPatterns.Any(p => text.Contains(p, StringComparison.OrdinalIgnoreCase));
 
                         if (isRelevant)
                         {

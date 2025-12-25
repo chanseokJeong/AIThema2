@@ -1,6 +1,7 @@
 using System;
 using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
+using AIThemaView2.Utils;
 
 namespace AIThemaView2.Models
 {
@@ -49,6 +50,19 @@ namespace AIThemaView2.Models
         [Required]
         [MaxLength(64)]
         public string Hash { get; set; } = string.Empty;
+
+        /// <summary>
+        /// 소스를 제외한 정규화된 해시 - 중복 제거에 사용
+        /// 같은 이벤트가 여러 소스에서 수집되어도 동일 해시 생성
+        /// </summary>
+        [NotMapped]
+        public string NormalizedHash => TitleNormalizer.GenerateNormalizedHash(Title, EventTime);
+
+        /// <summary>
+        /// 정규화된 제목 - 비교에 사용
+        /// </summary>
+        [NotMapped]
+        public string NormalizedTitle => TitleNormalizer.NormalizeTitle(Title);
 
         // Computed properties for display
         [NotMapped]

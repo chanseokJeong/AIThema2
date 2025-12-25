@@ -147,11 +147,11 @@ namespace AIThemaView2.Services.Scrapers
             foreach (var evt in events.OrderBy(e => e.EventTime))
             {
                 // 제목에서 핵심 키워드 추출 (번역된 한글 제목 기준)
-                var normalizedTitle = NormalizeTitle(evt.Title);
+                var normalizedKey = NormalizeIndicatorTitle(evt.Title);
 
-                if (!seen.Contains(normalizedTitle))
+                if (!seen.Contains(normalizedKey))
                 {
-                    seen.Add(normalizedTitle);
+                    seen.Add(normalizedKey);
                     result.Add(evt);
                 }
             }
@@ -160,9 +160,10 @@ namespace AIThemaView2.Services.Scrapers
         }
 
         /// <summary>
-        /// 제목 정규화 - 유사한 이름의 지표를 같은 것으로 처리
+        /// 경제지표 제목 정규화 - 유사한 이름의 지표를 같은 것으로 처리
+        /// (예: "CPI (MoM)"과 "CPI (YoY)"를 동일 그룹으로 처리)
         /// </summary>
-        private string NormalizeTitle(string title)
+        private string NormalizeIndicatorTitle(string title)
         {
             // 공백, 특수문자 제거하고 소문자로 변환
             var normalized = title.ToLower()

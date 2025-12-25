@@ -152,6 +152,62 @@ namespace AIThemaView2.Services.Scrapers
             return Convert.ToBase64String(hashBytes);
         }
 
+        /// <summary>
+        /// 제목에서 국가 이모지, 국가명 접두사 등을 제거하여 정규화
+        /// 서로 다른 소스에서 온 동일 이벤트를 식별하기 위함
+        /// </summary>
+        protected string NormalizeTitle(string title)
+        {
+            if (string.IsNullOrWhiteSpace(title))
+                return string.Empty;
+
+            var normalized = title;
+
+            // 국가 이모지 제거
+            normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"[\U0001F1E0-\U0001F1FF]{2}", "");
+
+            // 일반적인 국가명 접두사 제거
+            var prefixesToRemove = new[]
+            {
+                "🇺🇸 ", "🇰🇷 ", "🇯🇵 ", "🇨🇳 ", "🇪🇺 ",
+                "미국 ", "한국 ", "일본 ", "중국 ", "유럽 ",
+                "US ", "USA ", "Korea ", "KR ", "JP ", "CN ", "EU ",
+                "[미국] ", "[한국] ", "[US] ", "[KR] ",
+                "(미국) ", "(한국) ", "(US) ", "(KR) "
+            };
+
+            foreach (var prefix in prefixesToRemove)
+            {
+                if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    normalized = normalized.Substring(prefix.Length);
+                }
+            }
+
+            // 소스명 접두사 제거 (예: "[Investing.com]", "[토스증권]")
+            normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"^\[[^\]]+\]\s*", "");
+
+            // 공백 정규화
+            normalized = System.Text.RegularExpressions.Regex.Replace(normalized, @"\s+", " ").Trim();
+
+            // 소문자로 변환하여 대소문자 무시
+            normalized = normalized.ToLowerInvariant();
+
+            return normalized;
+        }
+
+        /// <summary>
+        /// 소스를 제외한 정규화된 해시 생성 - 중복 제거용
+        /// </summary>
+        protected string GenerateNormalizedHash(string title, DateTime eventTime)
+        {
+            var normalizedTitle = NormalizeTitle(title);
+            var input = $"{normalizedTitle}_{eventTime:yyyyMMdd}"; // 시간 제외, 날짜만 사용
+            using var sha256 = SHA256.Create();
+            var hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(input));
+            return Convert.ToBase64String(hashBytes);
+        }
+
         protected DateTime ParseKoreanDateTime(string dateTimeStr)
         {
             // Parse Korean datetime formats like "2025.12.24 12:21"
