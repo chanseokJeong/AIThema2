@@ -120,6 +120,11 @@ namespace AIThemaView2
                 services.AddSingleton<IScraperService, KrxScraperService>();
             }
 
+            if (configuration.GetValue<bool>("DataSources:TossCalendar:Enabled", false))
+            {
+                services.AddSingleton<IScraperService, TossCalendarScraperService>();
+            }
+
             // Services
             services.AddSingleton<IDataCollectionService, DataCollectionService>();
 
