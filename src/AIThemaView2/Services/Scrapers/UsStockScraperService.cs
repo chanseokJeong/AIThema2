@@ -45,6 +45,9 @@ namespace AIThemaView2.Services.Scrapers
                 // 주요 미국 휴장일 체크
                 AddUsMarketHolidays(events, targetDate);
 
+                // 미국 조기폐장일 체크 (Early Close)
+                AddUsEarlyCloseEvents(events, targetDate);
+
                 // 주요 FOMC 일정 추가 (고정 일정)
                 AddFomcSchedule(events, targetDate);
 
@@ -420,6 +423,41 @@ namespace AIThemaView2.Services.Scrapers
                         EventTime = new DateTime(targetDate.Year, targetDate.Month, targetDate.Day, 0, 0, 0),
                         Title = $"미국 증시 휴장 ({holidayName})",
                         Description = $"{holidayName} 연휴로 미국 증시가 휴장합니다.",
+                        Source = SourceName,
+                        SourceUrl = "https://www.nyse.com/markets/hours-calendars",
+                        Category = "휴장",
+                        IsImportant = true,
+                        Hash = hash
+                    });
+                }
+            }
+        }
+
+        private void AddUsEarlyCloseEvents(List<StockEvent> events, DateTime targetDate)
+        {
+            // 미국 증시 조기폐장일 (오후 1시 폐장, 한국시간 새벽 3시)
+            var earlyCloseDates = new Dictionary<DateTime, string>
+            {
+                // 2025년 조기폐장일
+                { new DateTime(2025, 7, 3), "독립기념일 전날" },
+                { new DateTime(2025, 11, 28), "추수감사절 다음날" },
+                { new DateTime(2025, 12, 24), "크리스마스 이브" },
+                // 2026년 조기폐장일
+                { new DateTime(2026, 7, 3), "독립기념일 전날" },
+                { new DateTime(2026, 11, 27), "추수감사절 다음날" },
+                { new DateTime(2026, 12, 24), "크리스마스 이브" }
+            };
+
+            if (earlyCloseDates.TryGetValue(targetDate.Date, out string? reason))
+            {
+                var hash = GenerateHash($"US_EarlyClose_{reason}", targetDate, SourceName);
+                if (!events.Any(e => e.Hash == hash))
+                {
+                    events.Add(new StockEvent
+                    {
+                        EventTime = new DateTime(targetDate.Year, targetDate.Month, targetDate.Day, 3, 0, 0), // 한국시간 새벽 3시 (미국 오후 1시)
+                        Title = $"미국 증시 조기폐장 ({reason})",
+                        Description = $"{reason}로 미국 증시가 오후 1시(현지시간)에 조기폐장합니다. 한국시간 새벽 3시.",
                         Source = SourceName,
                         SourceUrl = "https://www.nyse.com/markets/hours-calendars",
                         Category = "휴장",
