@@ -70,13 +70,15 @@ namespace AIThemaView2.Services.Scrapers
 
             try
             {
-                // Investing.com AJAX API 호출
+                // Investing.com AJAX API 호출 - 미국 + 한국 경제지표
                 var dateFrom = targetDate.ToString("yyyy-MM-dd");
                 var dateTo = targetDate.ToString("yyyy-MM-dd");
 
+                // country codes: 5 = United States, 11 = South Korea
                 var formContent = new FormUrlEncodedContent(new[]
                 {
-                    new KeyValuePair<string, string>("country[]", "5"), // 5 = United States
+                    new KeyValuePair<string, string>("country[]", "5"), // United States
+                    new KeyValuePair<string, string>("country[]", "11"), // South Korea
                     new KeyValuePair<string, string>("dateFrom", dateFrom),
                     new KeyValuePair<string, string>("dateTo", dateTo),
                     new KeyValuePair<string, string>("timeZone", "88"), // Seoul timezone
@@ -201,6 +203,19 @@ namespace AIThemaView2.Services.Scrapers
                         var timeNode = row.SelectSingleNode(".//td[contains(@class, 'time')]");
                         var timeText = timeNode != null ? CleanText(timeNode.InnerText) : "";
 
+                        // 국가 추출 (국기 아이콘의 title 속성에서)
+                        var flagNode = row.SelectSingleNode(".//td[contains(@class, 'flagCur')]//span[contains(@class, 'cemark')]")
+                            ?? row.SelectSingleNode(".//td[contains(@class, 'left')]//span[@title]");
+                        var countryTitle = flagNode?.GetAttributeValue("title", "") ?? "";
+
+                        // 국가 코드 판별
+                        bool isKorea = countryTitle.Contains("Korea", StringComparison.OrdinalIgnoreCase) ||
+                                      countryTitle.Contains("한국", StringComparison.OrdinalIgnoreCase) ||
+                                      row.OuterHtml.Contains("South Korea");
+                        bool isUS = countryTitle.Contains("United States", StringComparison.OrdinalIgnoreCase) ||
+                                   countryTitle.Contains("미국", StringComparison.OrdinalIgnoreCase) ||
+                                   row.OuterHtml.Contains("United States");
+
                         // 이벤트명 추출
                         var eventNode = row.SelectSingleNode(".//td[contains(@class, 'event')]//a")
                             ?? row.SelectSingleNode(".//td[contains(@class, 'event')]");
@@ -241,10 +256,17 @@ namespace AIThemaView2.Services.Scrapers
                         string description = BuildDescription(eventName, actual, forecast, previous);
                         string translatedName = TranslateEventName(eventName);
 
+                        // 국가 접두사 추가 (원본 이름에 국가 정보가 없는 경우)
+                        string countryPrefix = "";
+                        if (isKorea && !translatedName.StartsWith("한국"))
+                            countryPrefix = "🇰🇷 ";
+                        else if (isUS && !translatedName.StartsWith("미국"))
+                            countryPrefix = "🇺🇸 ";
+
                         var stockEvent = new StockEvent
                         {
                             EventTime = eventTime,
-                            Title = translatedName,
+                            Title = countryPrefix + translatedName,
                             Description = description,
                             Source = SourceName,
                             SourceUrl = EconomicCalendarUrl,
@@ -588,7 +610,22 @@ namespace AIThemaView2.Services.Scrapers
                 { "S&P Global Services PMI", "S&P 서비스업 PMI" },
                 { "Philadelphia Fed Manufacturing Index", "필라델피아 연준 제조업지수" },
                 { "Empire State Manufacturing Index", "뉴욕 엠파이어스테이트 제조업지수" },
-                { "Chicago PMI", "시카고 PMI" }
+                { "Chicago PMI", "시카고 PMI" },
+                // 한국 경제지표
+                { "South Korea Interest Rate", "한국 기준금리 결정" },
+                { "BoK Interest Rate Decision", "한국은행 기준금리 결정" },
+                { "South Korea GDP", "한국 GDP 성장률" },
+                { "South Korea CPI", "한국 소비자물가지수" },
+                { "South Korea Trade Balance", "한국 무역수지" },
+                { "South Korea Exports", "한국 수출" },
+                { "South Korea Imports", "한국 수입" },
+                { "South Korea Industrial Production", "한국 산업생산" },
+                { "South Korea Unemployment Rate", "한국 실업률" },
+                { "South Korea Manufacturing PMI", "한국 제조업 PMI" },
+                { "South Korea Current Account", "한국 경상수지" },
+                { "South Korea Retail Sales", "한국 소매판매" },
+                { "South Korea Consumer Confidence", "한국 소비자신뢰지수" },
+                { "South Korea PPI", "한국 생산자물가지수" }
             };
 
             foreach (var kvp in translations)
